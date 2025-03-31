@@ -26,7 +26,7 @@ ROCR: Performance evaluation for models
 
 How to Run:
 Clone the repository:
-git clone https://github.com/gudythecoder/Stepwise-Logistic-Regression-using-R.git
+git clone https://github.com/gudythecoder/Stepwise-Logistic-Regression-using-R-.git
 
 Install necessary packages:
 install.packages(c("caret", "tidyverse", "skimr", "e1071", "glmnet", "Matrix", "ROCR"))
