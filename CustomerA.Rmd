@@ -1,0 +1,174 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-03-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(caret)
+library(tidyverse)
+library(skimr)
+library(e1071)
+library(glmnet)
+library(Matrix)
+library(ROCR)
+```
+
+```{r load-data}
+options(scipen=999)
+
+# Load the dataset
+gourmet_data <- read.csv("~/Downloads/Assig2data.csv")
+
+# Data Cleaning: Drop unnecessary column
+gourmet_data <- gourmet_data[, -1]  # Dropping the 'Unnamed: 0' column
+head(gourmet_data)
+```
+
+```{r summary-stats}
+summaryStats <- skim(gourmet_data)
+summaryStats
+```
+
+```{r preprocess}
+table(gourmet_data$Response)
+
+gourmet_data <- gourmet_data %>%
+  mutate_at(c("Response", "Education"), as.factor) 
+
+# Rename response
+gourmet_data$Response <- fct_recode(gourmet_data$Response, accept = "1", notaccept = "0")
+
+# Relevel response
+gourmet_data$Response <- relevel(gourmet_data$Response, ref = "accept")
+
+# Check levels
+levels(gourmet_data$Response)
+```
+
+```{r dummy-vars}
+# Create dummy variables except for the response
+gourmet_predictors_dummy <- model.matrix(Response ~ ., data = gourmet_data)
+
+# Get rid of intercept and make dataframe
+gourmet_predictors_dummy <- data.frame(gourmet_predictors_dummy[,-1])
+
+# Combine with response
+gourmet_data <- cbind(Response = gourmet_data$Response, gourmet_predictors_dummy)
+```
+
+```{r split-data}
+set.seed(234)
+index <- createDataPartition(gourmet_data$Response, p = .8, list = FALSE)
+gourmet_train <- gourmet_data[index,]
+gourmet_test <- gourmet_data[-index,]
+```
+
+```{r forward-selection}
+set.seed(234)
+gourmet_fwd_model <- train(Response ~ .,
+                      data = gourmet_train,
+                      method = "glmStepAIC",
+                      direction = "forward",
+                      trControl = trainControl(method = "none", classProbs = TRUE,
+                                               summaryFunction = twoClassSummary), 
+                      metric = "ROC")
+gourmet_fwd_model
+```
+
+```{r fwd-coefficients}
+coef(gourmet_fwd_model$finalModel)
+```
+
+```{r fwd-prediction}
+predprob_lasso <- predict(gourmet_fwd_model, gourmet_test, type = "prob")
+
+fwd_pred_lasso <- prediction(predprob_lasso$accept, gourmet_test$Response,
+                             label.ordering = c("notaccept", "accept"))
+fwd_perf_lasso <- performance(fwd_pred_lasso, "tpr", "fpr")
+
+# Plot ROC curve
+plot(fwd_perf_lasso, colorize = TRUE)
+```
+
+```{r fwd-auc}
+# AUC value
+fwd_auc_lasso <- unlist(slot(performance(fwd_pred_lasso, "auc"), "y.values"))
+fwd_auc_lasso
+```
+
+```{r lasso-cv}
+set.seed(234)
+gourmet_cv_model <- train(Response ~ .,
+                          data = gourmet_train,
+                          method = "glmnet",
+                          standardize = TRUE,
+                          tuneGrid = expand.grid(alpha = 1,
+                                                 lambda = seq(0.0001, 1, length = 20)),
+                          trControl = trainControl(method = "cv",
+                                                   number = 5,
+                                                   classProbs = TRUE,
+                                                   summaryFunction = twoClassSummary),
+                          metric = "ROC")
+gourmet_cv_model
+```
+
+```{r lasso-coefs}
+# List coefficients
+cv_coef <- coef(gourmet_cv_model$finalModel, gourmet_cv_model$bestTune$lambda)
+cv_coef
+```
+
+```{r lasso-prediction}
+cv_predprob_lasso <- predict(gourmet_cv_model, gourmet_test, type = "prob")
+
+cv_pred_lasso <- prediction(cv_predprob_lasso$accept, gourmet_test$Response,
+                            label.ordering = c("notaccept", "accept"))
+cv_perf_lasso <- performance(cv_pred_lasso, "tpr", "fpr")
+
+# Plot ROC
+plot(cv_perf_lasso, colorize = TRUE)
+```
+
+```{r lasso-auc}
+# AUC value
+cv_auc_lasso <- unlist(slot(performance(cv_pred_lasso, "auc"), "y.values"))
+cv_auc_lasso
+```
+
+
+```r
+```{r plot-coefs, fig.height=7, fig.width=9, message=FALSE, warning=FALSE}
+# Extract and convert coefficients
+coef_raw <- coef(gourmet_fwd_model$finalModel)
+coef_matrix <- as.matrix(coef_raw)
+
+coef_df <- data.frame(Predictor = rownames(coef_matrix),
+                      Coefficient = coef_matrix[, 1]) %>%
+  filter(Coefficient != 0)  # Optional: remove zeros
+
+# Fancy plot
+ggplot(coef_df, aes(x = reorder(Predictor, Coefficient), 
+                    y = Coefficient, 
+                    fill = Coefficient)) +
+  geom_col(width = 0.7, show.legend = FALSE) +
+  geom_text(aes(label = round(Coefficient, 2)), 
+            hjust = ifelse(coef_df$Coefficient > 0, -0.1, 1.1), 
+            color = "black", size = 3.5) +
+  coord_flip() +
+  scale_fill_gradient2(low = "#E74C3C", mid = "white", high = "#2ECC71", midpoint = 0) +
+  labs(title = "Forward Selection LASSO Coefficients",
+       subtitle = "Non-zero predictors only",
+       x = NULL,
+       y = "Coefficient Value") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.y = element_blank(),
+        plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(size = 11, margin = margin(b = 10)))
+```
+
+
